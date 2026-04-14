@@ -39,16 +39,30 @@ const languageNames: Record<string, string> = {
   zh: "Chinese",
 };
 
+const languageGreetings: Record<string, string> = {
+  Spanish: "¡Hola",
+  French: "Bonjour",
+  Japanese: "こんにちは (Konnichiwa)",
+  Korean: "안녕하세요 (Annyeonghaseyo)",
+  German: "Hallo",
+  Tagalog: "Kamusta",
+  Italian: "Ciao",
+  Portuguese: "Olá",
+  Chinese: "你好 (Nǐ hǎo)",
+};
+
+const storedLanguage =
+  typeof window !== "undefined"
+    ? localStorage.getItem("lingua_language") || "Spanish"
+    : "Spanish";
+const greeting = languageGreetings[storedLanguage] || "Hello";
+
 const initialMessages: Message[] = [
   {
     id: "1",
     role: "assistant",
-    content:
-      "Hola! Welcome to your Spanish lesson. I'm your AI tutor. Let's start with a simple conversation. How are you today? Try responding in Spanish!",
-    vocabulary: [
-      { word: "Hola", translation: "Hello" },
-      { word: "hoy", translation: "today" },
-    ],
+    content: `${greeting}! Welcome to your ${storedLanguage} lesson. I'm your AI tutor. Let's start with a simple conversation. How are you today? Try responding in ${storedLanguage}!`,
+    vocabulary: [],
   },
 ];
 
@@ -176,11 +190,16 @@ export function ChatScreen({
       return message.content;
     }
 
-    let content = message.content;
+    const content = message.content;
+    if (typeof content !== "string" || content.length === 0) {
+      return content;
+    }
+
     const parts: (string | React.JSX.Element)[] = [];
     let lastIndex = 0;
 
     message.vocabulary.forEach((vocab, idx) => {
+      if (!vocab?.word || typeof vocab.word !== "string") return;
       const index = content.toLowerCase().indexOf(vocab.word.toLowerCase());
       if (index !== -1) {
         if (index > lastIndex) {
