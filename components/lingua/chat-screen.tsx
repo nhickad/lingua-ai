@@ -1,8 +1,9 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import { Settings, Clock, Send, ChevronDown, ChevronUp } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { fetchChat, Message as ApiMessage } from "@/lib/api";
 
 interface Message {
   id: string;
@@ -51,35 +52,6 @@ const initialMessages: Message[] = [
   },
 ];
 
-const mockResponses: Message[] = [
-  {
-    id: "3",
-    role: "assistant",
-    content:
-      "Muy bien! Your Spanish is improving. Let's practice some common phrases. Can you tell me what you did yesterday? Use the past tense - el pretérito.",
-    correction: {
-      original: "Yo soy bien",
-      corrected: "Yo estoy bien",
-      explanation:
-        "Use 'estar' for temporary states like feelings, not 'ser'.",
-    },
-    vocabulary: [
-      { word: "ayer", translation: "yesterday" },
-      { word: "pretérito", translation: "past tense" },
-    ],
-  },
-  {
-    id: "5",
-    role: "assistant",
-    content:
-      "Excelente trabajo! You're making great progress. The verb conjugation was perfect. Now, let's try something more challenging. Describe your favorite place using descriptive adjectives.",
-    vocabulary: [
-      { word: "trabajo", translation: "work/job" },
-      { word: "lugar", translation: "place" },
-      { word: "favorito", translation: "favorite" },
-    ],
-  },
-];
 
 export function ChatScreen({
   language,
@@ -89,12 +61,12 @@ export function ChatScreen({
 }: ChatScreenProps) {
   const [messages, setMessages] = useState<Message[]>(initialMessages);
   const [input, setInput] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
   const [sessionTime, setSessionTime] = useState(0);
   const [expandedCorrections, setExpandedCorrections] = useState<Set<string>>(
     new Set()
   );
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const responseIndex = useRef(0);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -113,8 +85,8 @@ export function ChatScreen({
     return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
   };
 
-  const handleSend = () => {
-    if (!input.trim()) return;
+  const handleSend = async () => {
+    if (!input.trim() || isLoading) return;
 
     const userMessage: Message = {
       id: Date.now().toString(),
@@ -122,32 +94,52 @@ export function ChatScreen({
       content: input,
     };
 
+    const history: ApiMessage[] = messages.map((m) => ({
+      role: m.role,
+      content: m.content,
+    }));
+
     setMessages((prev) => [...prev, userMessage]);
     setInput("");
+    setIsLoading(true);
 
-    // Simulate AI response
-    setTimeout(() => {
-      if (responseIndex.current < mockResponses.length) {
-        setMessages((prev) => [
-          ...prev,
-          {
-            ...mockResponses[responseIndex.current],
-            id: Date.now().toString(),
-          },
-        ]);
-        responseIndex.current++;
-      } else {
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: Date.now().toString(),
-            role: "assistant",
-            content:
-              "Great response! Keep practicing. Your vocabulary and grammar are steadily improving. Would you like to try another topic?",
-          },
-        ]);
-      }
-    }, 1000);
+    const storedLanguage =
+      localStorage.getItem("lingua_language") ??
+      languageNames[language] ??
+      language ??
+      "Spanish";
+    const storedLevel =
+      localStorage.getItem("lingua_level") ?? level ?? "beginner";
+
+    try {
+      const response = await fetchChat(
+        userMessage.content,
+        storedLanguage,
+        storedLevel,
+        history
+      );
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: Date.now().toString(),
+          role: "assistant",
+          content: response.reply,
+          correction: response.corrections?.[0],
+          vocabulary: response.vocab,
+        },
+      ]);
+    } catch {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: Date.now().toString(),
+          role: "assistant",
+          content: "Sorry, I had trouble responding. Please try again.",
+        },
+      ]);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const toggleCorrection = (messageId: string) => {
@@ -185,7 +177,7 @@ export function ChatScreen({
     }
 
     let content = message.content;
-    const parts: (string | JSX.Element)[] = [];
+    const parts: (string | React.JSX.Element)[] = [];
     let lastIndex = 0;
 
     message.vocabulary.forEach((vocab, idx) => {
@@ -330,6 +322,20 @@ export function ChatScreen({
               )}
             </div>
           ))}
+          {isLoading && (
+            <div className="flex gap-3 justify-start">
+              <div className="w-10 h-10 rounded-full bg-gradient-to-br from-primary to-secondary flex items-center justify-center flex-shrink-0 shadow-lg shadow-primary/20">
+                <span className="text-lg">🤖</span>
+              </div>
+              <div className="bg-card-elevated text-foreground border border-border/30 rounded-2xl px-4 py-3">
+                <div className="flex gap-1 items-center h-5">
+                  <span className="w-2 h-2 rounded-full bg-muted-foreground animate-bounce [animation-delay:0ms]" />
+                  <span className="w-2 h-2 rounded-full bg-muted-foreground animate-bounce [animation-delay:150ms]" />
+                  <span className="w-2 h-2 rounded-full bg-muted-foreground animate-bounce [animation-delay:300ms]" />
+                </div>
+              </div>
+            </div>
+          )}
           <div ref={messagesEndRef} />
         </div>
       </main>
@@ -349,16 +355,17 @@ export function ChatScreen({
                   }
                 }}
                 placeholder={`Type in ${languageNames[language] || "your target language"}...`}
-                className="w-full resize-none bg-card-elevated border border-border/50 rounded-xl px-4 py-3 pr-12 text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all"
+                className="w-full resize-none bg-card-elevated border border-border/50 rounded-xl px-4 py-3 pr-12 text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all disabled:opacity-50"
                 rows={1}
+                disabled={isLoading}
               />
             </div>
             <button
               onClick={handleSend}
-              disabled={!input.trim()}
+              disabled={!input.trim() || isLoading}
               className={cn(
                 "p-3 rounded-xl transition-all duration-200",
-                input.trim()
+                input.trim() && !isLoading
                   ? "bg-gradient-to-r from-primary to-secondary text-primary-foreground shadow-lg shadow-primary/30 hover:shadow-xl hover:shadow-primary/40 hover:scale-105"
                   : "bg-muted text-muted-foreground cursor-not-allowed"
               )}
