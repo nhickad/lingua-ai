@@ -31,6 +31,16 @@ export function OnboardingScreen({ onComplete }: OnboardingScreenProps) {
 
   const handleStart = () => {
     if (canProceed) {
+      const langName =
+        languages.find((l) => l.code === selectedLanguage)?.name ||
+        selectedLanguage;
+      localStorage.setItem("lingua_language", langName);
+      localStorage.setItem("lingua_level", selectedLevel);
+      localStorage.setItem("lingua_name", name.trim());
+      localStorage.setItem("lingua_last_active", new Date().toDateString());
+      if (!localStorage.getItem("lingua_streak")) {
+        localStorage.setItem("lingua_streak", "1");
+      }
       onComplete({
         language: selectedLanguage,
         level: selectedLevel,

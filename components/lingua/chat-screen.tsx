@@ -4,6 +4,7 @@ import React, { useState, useRef, useEffect } from "react";
 import { Settings, Clock, Send, ChevronDown, ChevronUp } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { fetchChat, Message as ApiMessage } from "@/lib/api";
+import { getLanguage, getLevel, getStreak, updateStreak, saveVocab } from "@/lib/storage";
 
 interface Message {
   id: string;
@@ -51,21 +52,18 @@ const languageGreetings: Record<string, string> = {
   Chinese: "你好 (Nǐ hǎo)",
 };
 
-const storedLanguage =
-  typeof window !== "undefined"
-    ? localStorage.getItem("lingua_language") || "Spanish"
-    : "Spanish";
-const greeting = languageGreetings[storedLanguage] || "Hello";
-
-const initialMessages: Message[] = [
-  {
-    id: "1",
-    role: "assistant",
-    content: `${greeting}! Welcome to your ${storedLanguage} lesson. I'm your AI tutor. Let's start with a simple conversation. How are you today? Try responding in ${storedLanguage}!`,
-    vocabulary: [],
-  },
-];
-
+function getInitialMessages(language: string, userName: string): Message[] {
+  const langName = languageNames[language] || language;
+  const greeting = languageGreetings[langName] || "Hello";
+  return [
+    {
+      id: "1",
+      role: "assistant",
+      content: `${greeting} ${userName}! Welcome to your ${langName} lesson. I'm your AI tutor. Let's start with a simple conversation. How are you today? Try responding in ${langName}!`,
+      vocabulary: [],
+    },
+  ];
+}
 
 export function ChatScreen({
   language,
@@ -73,10 +71,13 @@ export function ChatScreen({
   userName,
   onNavigate,
 }: ChatScreenProps) {
-  const [messages, setMessages] = useState<Message[]>(initialMessages);
+  const [messages, setMessages] = useState<Message[]>(() =>
+    getInitialMessages(language, userName)
+  );
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [sessionTime, setSessionTime] = useState(0);
+  const [streak, setStreak] = useState(0);
   const [expandedCorrections, setExpandedCorrections] = useState<Set<string>>(
     new Set()
   );
@@ -87,6 +88,10 @@ export function ChatScreen({
       setSessionTime((prev) => prev + 1);
     }, 1000);
     return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    setStreak(getStreak());
   }, []);
 
   useEffect(() => {
@@ -117,13 +122,11 @@ export function ChatScreen({
     setInput("");
     setIsLoading(true);
 
-    const storedLanguage =
-      localStorage.getItem("lingua_language") ??
-      languageNames[language] ??
-      language ??
-      "Spanish";
-    const storedLevel =
-      localStorage.getItem("lingua_level") ?? level ?? "beginner";
+    updateStreak();
+    setStreak(getStreak());
+
+    const storedLanguage = getLanguage();
+    const storedLevel = getLevel();
 
     try {
       const response = await fetchChat(
@@ -142,6 +145,9 @@ export function ChatScreen({
           vocabulary: response.vocab,
         },
       ]);
+      if (response.vocab && response.vocab.length > 0) {
+        saveVocab(response.vocab, storedLanguage);
+      }
     } catch {
       setMessages((prev) => [
         ...prev,
@@ -242,6 +248,12 @@ export function ChatScreen({
             </div>
           </div>
           <div className="flex items-center gap-4">
+            {streak > 0 && (
+              <div className="flex items-center gap-1.5 px-3 py-1 bg-orange-500/10 text-orange-500 rounded-full text-sm font-medium">
+                <span>🔥</span>
+                <span>{streak}</span>
+              </div>
+            )}
             <div className="flex items-center gap-2 text-muted-foreground">
               <Clock className="w-4 h-4" />
               <span className="font-mono text-sm">{formatTime(sessionTime)}</span>

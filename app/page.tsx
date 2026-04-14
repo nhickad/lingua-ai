@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { OnboardingScreen } from "@/components/lingua/onboarding-screen";
 import { ChatScreen } from "@/components/lingua/chat-screen";
 import { ProgressScreen } from "@/components/lingua/progress-screen";
@@ -16,6 +16,18 @@ interface UserData {
 export default function LinguaAI() {
   const [currentScreen, setCurrentScreen] = useState<Screen>("onboarding");
   const [userData, setUserData] = useState<UserData | null>(null);
+
+  useEffect(() => {
+    const storedName = localStorage.getItem("lingua_name");
+    if (storedName) {
+      setUserData({
+        language: localStorage.getItem("lingua_language") || "Spanish",
+        level: localStorage.getItem("lingua_level") || "Beginner",
+        name: storedName,
+      });
+      setCurrentScreen("chat");
+    }
+  }, []);
 
   const handleOnboardingComplete = (data: UserData) => {
     setUserData(data);
