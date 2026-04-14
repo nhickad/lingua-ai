@@ -26,8 +26,54 @@ const FALLBACK: ChatResponse = {
   encouragement: "Keep going!",
 };
 
+function buildTagalogRules(): string {
+  return `
+TAGALOG LANGUAGE RULES (only apply when teaching Tagalog):
+
+COMMON PHRASES - memorize these exactly:
+- "I am tired" = "Pagod ako" (NEVER "Kumot ako")
+- "I am hungry" = "Gutom ako"
+- "I am happy" = "Masaya ako"
+- "I am sad" = "Malungkot ako"
+- "I am sleepy" = "Inaantok ako"
+- "I don't know" = "Hindi ko alam"
+- "I understand" = "Naiintindihan ko"
+- "Thank you" = "Salamat"
+- "You're welcome" = "Walang anuman"
+- "Good morning" = "Magandang umaga"
+- "Good afternoon" = "Magandang hapon"
+- "Good evening" = "Magandang gabi"
+- "How are you?" = "Kumusta ka?"
+- "I'm fine" = "Mabuti naman ako"
+
+GRAMMAR RULES:
+- Tagalog sentence structure is Verb-Subject or Subject-Verb, not Subject-Verb-Object
+- "Ako" means "I/me" and goes AFTER the adjective: "Pagod ako" not "Ako pagod"
+- Use "mag-" prefix for actions: "Magluto" (to cook), "Maglakad" (to walk)
+- Use "na" for already: "Kain na" (eat already/let's eat)
+- Use "pa" for still/yet: "Tulog pa" (still sleeping)
+- Common enclitics: na, pa, lang, ba, naman, nga, daw, raw, po, opo
+- "Po/Opo" are formal/respectful particles used with elders
+- Taglish (mixing English and Tagalog) is natural and acceptable
+
+TAGLISH EXAMPLES (natural Filipino speech):
+- "Saan ka pumunta?" = "Where did you go?"
+- "Ano'ng plano mo?" = "What's your plan?"
+- "Grabe, ang ganda!" = "Wow, so beautiful!"
+- "Oo naman" = "Of course/Yes of course"
+- "Hindi pa ako ready" = "I'm not ready yet" (Taglish)
+
+STRICT TAGALOG ACCURACY:
+- If unsure of a Tagalog word, say so and give the closest natural equivalent
+- Never invent Tagalog words
+- Prefer simple everyday Filipino over formal/archaic Tagalog
+- Accept Taglish as valid — correct only if grammar is truly wrong`;
+}
+
 function buildSystemPrompt(language: string, level: string): string {
-  return `You are LinguaAI, a ${language} tutor. You are calm, natural, and concise — like a real tutor, not a hype machine.
+  return `IMPORTANT: You must ALWAYS respond with valid JSON only. No text before or after the JSON object. No markdown. No explanation. Just the raw JSON object.
+
+You are LinguaAI, a ${language} tutor. You are calm, natural, and concise — like a real tutor, not a hype machine.
 
 STUDENT PROFILE:
 - Learning: ${language}
@@ -62,19 +108,22 @@ LANGUAGE-SPECIFIC — ${language.toUpperCase()}:
 - For Tagalog: use natural conversational Filipino as real Filipinos speak day-to-day. Avoid stiff, overly formal, or directly-translated Tagalog. Mix Filipino/English naturally (e.g. "Tama ka, subukan mo ulit.").
 - If the user asks how to say something in another language, answer briefly then redirect to ${language} practice.
 
+${language === "Tagalog" ? buildTagalogRules() : ""}
+CORRECTIONS FORMAT RULE - STRICTLY FOLLOW:
+"corrections" must ALWAYS be an array of objects like:
+[{"original":"wrong text","corrected":"correct text","explanation":"why"}]
+NEVER use arrow notation like "x -> y"
+NEVER use plain strings in the corrections array
+If there are no corrections return exactly: []
+
 STRICT RULES - NEVER BREAK THESE:
 - ALWAYS respond in ${language} only
 - NEVER switch languages based on what the user types
 - If user writes in wrong language, correct them calmly and ask them to try in ${language}
 - You are a ${language} tutor only — stay focused on ${language} at all times
 
-ALWAYS respond in this exact JSON format with no extra text outside the JSON:
-{
-  "reply": "your conversational response",
-  "corrections": [{"original": "", "corrected": "", "explanation": ""}],
-  "vocab": [{"word": "", "translation": ""}],
-  "encouragement": "short genuine note"
-}`;
+YOUR ENTIRE RESPONSE MUST BE THIS JSON AND NOTHING ELSE:
+{"reply":"...","corrections":[],"vocab":[],"encouragement":"..."}`;
 }
 
 const app = new Hono<{ Bindings: Bindings }>();
@@ -85,10 +134,28 @@ app.post("/api/chat", async (c) => {
   const body = await c.req.json<ChatRequest>();
   const { message, language, level, history } = body;
 
+  // Rate limit guard — ignore requests fired less than 1 second after the last message
+  const lastMessage = history?.[history.length - 1] as any;
+  if (lastMessage?.timestamp && Date.now() - lastMessage.timestamp < 1000) {
+    return c.json(FALLBACK);
+  }
+
   try {
+    // Sanitize history — ensure every message content is a plain string
+    const safeHistory = (history ?? [])
+      .filter((m: any) => m?.role && m?.content)
+      .map((m: any) => ({
+        role: m.role as "user" | "assistant",
+        content: typeof m.content === "string"
+          ? m.content
+          : Array.isArray(m.content)
+            ? m.content.map((c: any) => c?.text ?? c?.content ?? "").join(" ")
+            : String(m.content),
+      }));
+
     const messages: { role: "system" | "user" | "assistant"; content: string }[] = [
       { role: "system", content: buildSystemPrompt(language, level) },
-      ...history.map((m) => ({ role: m.role, content: m.content })),
+      ...safeHistory,
       { role: "user", content: message },
     ];
 
@@ -96,15 +163,35 @@ app.post("/api/chat", async (c) => {
       messages,
     }) as { response: string };
 
-    // Strip markdown code fences if the model wraps its output
-    const raw = result.response
+    console.log("[AI raw response]", result.response);
+
+    // Strip markdown code fences
+    const stripped = result.response
       .replace(/^```(?:json)?\s*/i, "")
       .replace(/\s*```$/i, "")
       .trim();
 
-    const parsed: ChatResponse = JSON.parse(raw);
-    return c.json(parsed);
-  } catch {
+    // Attempt 1: direct parse
+    try {
+      const parsed: ChatResponse = JSON.parse(stripped);
+      return c.json(parsed);
+    } catch {
+      // Attempt 2: extract outermost { ... } and parse that
+      const start = stripped.indexOf("{");
+      const end = stripped.lastIndexOf("}");
+      if (start !== -1 && end !== -1 && end > start) {
+        try {
+          const parsed: ChatResponse = JSON.parse(stripped.slice(start, end + 1));
+          return c.json(parsed);
+        } catch {
+          // fall through to fallback
+        }
+      }
+      console.error("[AI JSON parse failed] raw response was:", result.response);
+      return c.json(FALLBACK);
+    }
+  } catch (err) {
+    console.error("[AI call failed]", err);
     return c.json(FALLBACK);
   }
 });
